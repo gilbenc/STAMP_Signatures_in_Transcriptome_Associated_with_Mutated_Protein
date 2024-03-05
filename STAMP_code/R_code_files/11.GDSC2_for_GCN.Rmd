@@ -1,0 +1,1104 @@
+---
+title: "GDSC2 exploration for GCN"
+author: "Adar Yaacov"
+date: "4 12 2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(pheatmap)
+library(stringr)
+library(readr)
+
+```
+
+# load GDSC2 data
+```{r load}
+pan_gdsc <- read.csv("./GDSC_models/GDSC_models_2.0/GDSC_cell_lines_zscored_pan_GDSC_RTK RAS_all_cancer_types_GCN_predictions.csv")
+gdsc2_v2 <- readxl::read_excel("GDSC2_fitted_dose_response_25Feb20.xlsx")
+gdsc_mut <- read.csv("PANCANCER_Genetic_feature_variant_Mon Jan 31 20_25_43 2022.csv")
+
+gdsc2 <- read.csv("PANCANCER_IC_Sat Dec  4 11_23_13 2021.csv")
+colnames(gdsc2) <- gsub("[.]","_",colnames(gdsc2))
+
+anova <- read_csv("PANCANCER_ANOVA_Sat Dec  4 11_18_24 2021.csv")
+
+```
+
+```{r }
+PI3K_proj <- c("BRCA", "LUAD", "LUSC")
+
+PI3K_pathways <- unique(anova$target_pathway)[grepl("PI3K", unique(anova$target_pathway)) | grepl("MTOR", unique(anova$target_pathway)) | grepl("AKT", unique(anova$target_pathway))]
+
+PI3K_drugs <- unique(c(anova$drug_name[anova$target_pathway %in% PI3K_pathways]))
+
+PI3K_drugs
+
+PI3K <- gdsc2 %>% 
+  filter(TCGA_classification %in% PI3K_proj) %>%
+  filter(Drug_name %in% PI3K_drugs)
+
+g1 <- ggplot(PI3K, aes(x=Drug_name, y=IC50, fill=TCGA_classification)) +
+  geom_boxplot() + geom_jitter(width = 0.2) + ggtitle("PI3K")
+print(g1)
+
+
+```
+
+
+# test model predictions
+```{r}
+PATH_output <- "C:\\Users\\USER\\Desktop\\gil\\lab\\GCN\\GCN_analysis\\GDSC_drugs_cell_lines_expression\\GDSC_output_10_2022_and_after\\"
+
+pathway = "PI3K"
+genes = c("PTEN", "AKT", "PIK3ca")
+tumor_type = "LUAD"
+drug_name = "Alpelisib"
+
+setwd("C:\\Users\\USER\\Desktop\\gil\\lab\\GCN\\Main_code_scripts\\Adar_GDSC_markdown\\")
+
+df <- expand.grid(PI3K_drugs, c("BRCA", "LUAD", "LUSC"), c("pearson", "spearman"))
+colnames(df) <- c("drug", "tumor_type", "test") 
+df$p_val <- NA
+for(tumor_type in c("BRCA", "LUAD", "LUSC")){
+  for(drug_name in "Alpelisib"){
+      pathway_tumor_type_model <- read.csv(paste0("GDSC_cell_lines_zscored_pan_GDSC_", pathway, "_", tumor_type, "_GCN_predictions.csv"))
+  
+      pathway_gcn <- left_join(get(pathway), pathway_tumor_type_model, by = c("Cell_line_name"= "CELL_LINE_NAME"))
+      pathway_gcn <- pathway_gcn %>% filter(TCGA_classification == tumor_type)
+      
+      pathway_gcn <- left_join(pathway_gcn, gdsc_mut[,c("cell_line_name", "genetic_feature", "is_mutated")] %>%  filter(genetic_feature %in% paste0(genes, "_mut")), by=c("Cell_line_name"="cell_line_name"))
+      
+      pathway_gcn_for_plot <- pathway_gcn[pathway_gcn$Drug_name == drug_name,] %>% filter(!is.na(GCN_pred))
+      if(nrow(pathway_gcn_for_plot) < 5) next
+    
+      g <- ggplot(pathway_gcn_for_plot, aes(x=IC50, y=GCN_linear)) +
+    geom_point(size = 1.5, alpha = 0.7, aes(col = as.factor(is_mutated))) + ggpubr::stat_cor(method = "spearman", label.x = 1, label.y = -5, size = 2.7) + theme_classic()+
+    geom_smooth(method = "loess") +
+    theme(
+      text = element_text(size = 6, face = "bold"),
+      legend.title = element_blank(),
+      plot.title = element_text(hjust = 0.5)
+  ) + ggtitle(paste0(tumor_type, ", ", pathway, ", ", drug_name)) +
+    scale_color_discrete(labels = c("WT","Mut"))
+
+  
+  spearman_test <- cor.test(pathway_gcn_for_plot$IC50, pathway_gcn_for_plot$GCN_linear, method = "spearman")
+  
+  df[df$drug == drug_name & df$tumor_type == tumor_type & df$test == "spearman","p_val"] <- spearman_test$p.value
+  # 
+  # if(spearman_test$p.value < 0.05){
+  #   
+    tiff(paste0(PATH_output, pathway, "_", drug_name, "_", tumor_type, "_spearman_cor_v3.0.tiff"), res = 300, width = 800, height = 640)
+    print(g)
+    dev.off()
+  # }
+  # 
+# 
+    g <- ggplot(pathway_gcn_for_plot, aes(x=IC50, y=GCN_linear)) +
+    geom_point(size = 1.5, alpha = 0.7, aes(col = as.factor(is_mutated))) + ggpubr::stat_cor(method = "pearson", label.x = 1, label.y = -5, size = 2.7) + theme_classic()+
+    geom_smooth(method = "lm") +
+    theme(
+      text = element_text(size = 6, face = "bold"),
+      legend.title = element_blank(),
+      plot.title = element_text(hjust = 0.5)
+  ) + ggtitle(paste0(tumor_type, ", ", pathway, ", ", drug_name)) +
+    scale_color_discrete(labels = c("WT","Mut"))
+#   
+    pearson_test <- cor.test(pathway_gcn_for_plot$IC50, pathway_gcn_for_plot$GCN_linear, method = "pearson")
+  
+  df[df$drug == drug_name & df$tumor_type == tumor_type & df$test == "pearson","p_val"] <- pearson_test$p.value
+  #   
+  # if(pearson_test$p.value < 0.05){
+  #   
+  #   tiff(paste0(PATH_output, pathway, "_", drug_name, "_", tumor_type, "_pearson_cor_v3.0.tiff"), res = 300, width = 800, height = 640)
+  #   print(g)
+  #   dev.off()  
+  # }
+  
+  
+  }
+}
+
+# g <- ggplot(erbb2_gcn[erbb2_gcn$Drug_name == "Alpelisib",] %>% filter(!is.na(GCN_pred)), aes(x=AUC, y=GCN_linear)) + 
+#   geom_point(size = 1.5, alpha = 0.7, aes(col = as.factor(is_mutated))) + ggpubr::stat_cor(method = "spearman", label.x = 0.25, label.y = -10, size = 2.7) + theme_classic()+
+#   geom_smooth(method = "loess") + 
+#   theme(
+#     text = element_text(size = 6, face = "bold"),
+#     legend.title = element_blank(),
+#     plot.title = element_text(hjust = 0.5)
+# ) + ggtitle("BRCA, PI3K, Alpelisib") + 
+#   scale_color_discrete(labels = c("WT","Mut"))
+# 
+# tiff("PI3K_Alpelisib_cor_AUC_v3.0.tiff", res = 300, width = 800, height = 640)
+# g
+# dev.off()
+
+
+df$p_val_fdr <- p.adjust(df$p_val, method = "fdr")
+
+pearson_fdr <- as.data.frame(p.adjust(df$p_val[df$test == "pearson"], method = "fdr"))
+```
+
+
+# EGFR gene & pathway
+```{r }
+egfr_proj <- c("GBM")
+
+egfr_drugs <- unique(c(anova$drug_name[anova$target_pathway %in% c("EGFR signaling","EGFR")], anova$drug_name[anova$drug_target %in% c("EGFR")]))
+egfr_drugs
+
+egfr <- gdsc2 %>% 
+  filter(TCGA_classification %in% egfr_proj) %>%
+  filter(Drug_name %in% egfr_drugs)
+
+g1 <- ggplot(egfr, aes(x=Drug_name, y=IC50, fill=TCGA_classification)) +
+  geom_boxplot() + geom_jitter(width = 0.2) + ggtitle("EGFR")
+g1
+```
+
+#ERBB2
+```{r }
+erbb2_proj <- c("BRCA")
+
+#ERBB2 drugs are part of EGFR pathway drugs
+erbb2_drugs <- unique(c(anova$drug_name[anova$target_pathway %in% c("ERBB2")], anova$drug_name[anova$drug_target %in% c("ERBB2")]))
+erbb2_drugs
+
+erbb2 <- gdsc2 %>% 
+  filter(TCGA_classification %in% erbb2_proj) %>%
+  filter(Drug_name %in% erbb2_drugs)
+
+g2 <- ggplot(erbb2, aes(x=Drug_name, y=IC50, fill=TCGA_classification)) +
+  geom_boxplot() + geom_point(position=position_jitterdodge(jitter.width = 0.125)) + ggtitle("ERBB2")
+g2
+```
+
+# BRAF (gene)
+```{r }
+braf_proj <- c("SKCM","THCA")
+
+braf_drugs <- unique(c(anova$drug_name[anova$drug_target %in% c("BRAF")]))
+braf_drugs
+
+braf <- gdsc2 %>% 
+  filter(TCGA_classification %in% braf_proj) %>%
+  filter(Drug_name %in% braf_drugs)
+
+g3 <- ggplot(braf, aes(x=Drug_name, y=IC50, fill=TCGA_classification)) +
+  geom_boxplot() + geom_point(position=position_jitterdodge(jitter.width = 0.125)) + ggtitle("BRAF (gene)")
+g3
+```
+
+# BRAF (ERK MAPK pathway)
+```{r }
+
+braf_proj <- c("SKCM","THCA")
+
+braf_drugs <- unique(c(anova$drug_name[anova$target_pathway %in% c("ERK MAPK signaling")]))
+braf_drugs
+
+braf <- gdsc2 %>% 
+  filter(TCGA_classification %in% braf_proj) %>%
+  filter(Drug_name %in% braf_drugs)
+
+g4 <- ggplot(braf, aes(x=Drug_name, y=IC50, fill=TCGA_classification)) +
+  geom_boxplot() + geom_point(position=position_jitterdodge(jitter.width = 0.125)) + ggtitle("BRAF (ERK MAPK pathway)")
+g4
+```
+
+# KRAS (gene)
+```{r }
+kras_proj <- c("LUAD","PAAD","COREAD")
+
+kras_drugs <- "KRAS (G12C) Inhibitor-12"
+kras_drugs
+
+kras <- gdsc2 %>% 
+  filter(TCGA_classification %in% kras_proj) %>%
+  filter(Drug_name %in% kras_drugs)
+
+g5 <- ggplot(kras, aes(x=Drug_name, y=IC50, fill=TCGA_classification)) +
+  geom_boxplot() + geom_point(position=position_jitterdodge(jitter.width = 0.125)) + ggtitle("KRAS (gene)")
+g5
+```
+
+# TP53 pathway
+```{r }
+
+tp53_proj <- unique(gdsc2$TCGA_classification[!(gdsc2$TCGA_classification %in% c("THCA","SKCM","CESC","OV","MESO","UCS","DLBC","CHOL", "","UNCLASSIFIED"))])
+tp53_proj
+
+tp53_drugs <- unique(c(anova$drug_name[anova$target_pathway %in% c("p53 pathway")]))
+tp53_drugs
+
+tp53 <- gdsc2 %>% 
+  filter(TCGA_classification %in% tp53_proj) %>%
+  filter(Drug_name %in% tp53_drugs)
+
+g6 <- ggplot(tp53, aes(x=TCGA_classification, y=IC50, fill=Drug_name)) +
+  geom_boxplot() + ggtitle("tp53 (pathway)")
+g6
+
+pdf("TP53_GDSC2.pdf", width = 17)
+g6
+dev.off()
+```
+
+# test model predictions
+```{r}
+example_model <- read.csv("./GDSC_models_3.0/GDSC_cell_lines_zscored_pan_GDSC_ERBB2_BRCA_GCN_predictions.csv")
+
+erbb2_gcn <- left_join(erbb2, example_model, by = c("Cell_line_name"= "CELL_LINE_NAME"))
+erbb2_gcn <- erbb2_gcn %>% filter(TCGA_classification == "BRCA")
+
+erbb2_gcn <- left_join(erbb2_gcn, 
+                       gdsc_mut[,c("cell_line_name", "genetic_feature",
+                                   "is_mutated")] %>% 
+                        filter(genetic_feature == "ERBB2_mut"), 
+                       by=c("Cell_line_name"="cell_line_name"))
+
+g <- ggplot(erbb2_gcn[erbb2_gcn$Drug_name == "Afatinib",] %>% filter(!is.na(GCN_pred)), aes(x=IC50, y=GCN_linear)) + 
+  geom_point(size = 1.5, alpha = 0.7, aes(col = as.factor(is_mutated))) + ggpubr::stat_cor(label.x = -3.5, label.y = -10, size = 2.7) + theme_classic()+
+  geom_smooth(method = "lm") + 
+  theme(
+    text = element_text(size = 6, face = "bold"),
+    legend.title = element_blank(),
+    plot.title = element_text(hjust = 0.5)
+) + ggtitle("BRCA, ERBB2, Afatinib") + 
+  scale_color_discrete(labels = c("WT","Mut"))
+
+tiff("ERBB2_Afatinib_cor_v3.0.tiff", res = 300, width = 800, height = 640)
+g
+dev.off()
+
+g <- ggplot(erbb2_gcn[erbb2_gcn$Drug_name == "Afatinib",] %>% filter(!is.na(GCN_pred)), aes(x=AUC, y=GCN_linear)) + 
+  geom_point(size = 1.5, alpha = 0.7, aes(col = as.factor(is_mutated))) + ggpubr::stat_cor(label.x = 0.25, label.y = -10, size = 2.7) + theme_classic()+
+  geom_smooth(method = "lm") + 
+  theme(
+    text = element_text(size = 6, face = "bold"),
+    legend.title = element_blank(),
+    plot.title = element_text(hjust = 0.5)
+) + ggtitle("BRCA, ERBB2, Afatinib") + 
+  scale_color_discrete(labels = c("WT","Mut"))
+
+tiff("ERBB2_Afatinib_cor_AUC_v3.0.tiff", res = 300, width = 800, height = 640)
+g
+dev.off()
+
+```
+
+manually skcm
+```{r}
+example_model <- read.csv("./GDSC_models_3.0/GDSC_cell_lines_zscored_pan_GDSC_BRAF_SKCM_GCN_predictions.csv")
+
+BRAF_gcn <- left_join(braf, example_model, by = c("Cell_line_name"= "CELL_LINE_NAME"))
+BRAF_gcn <- BRAF_gcn %>% filter(TCGA_classification == "SKCM")
+
+BRAF_gcn <- left_join(BRAF_gcn, 
+                       gdsc_mut[,c("cell_line_name", "genetic_feature",
+                                   "is_mutated")] %>% 
+                        filter(genetic_feature == "BRAF_mut"), 
+                       by=c("Cell_line_name"="cell_line_name"))
+
+g <- ggplot(BRAF_gcn[BRAF_gcn$Drug_name == "Dabrafenib" & 
+                       BRAF_gcn$TCGA_classification == "SKCM",] %>% filter(!is.na(GCN_pred)), aes(x=IC50, y=GCN_linear)) + 
+  geom_point(size = 1.5, alpha = 0.7, aes(col = as.factor(is_mutated))) + ggpubr::stat_cor(label.x = -3.5, label.y = -4.5, size = 2.7) + theme_classic()+
+  geom_smooth(method = "lm") + 
+  theme(
+    text = element_text(size = 6, face = "bold"),
+    legend.title = element_blank(),
+    plot.title = element_text(hjust = 0.5)
+) + ggtitle("SKCM, BRAF, Dabrafenib") + 
+  scale_color_manual(labels = c("WT","Mut"), values = c("#67a9cf","#ef8a62"))
+
+tiff("BRAF_SKCM_DAB_cor_v3.0_colors.tiff", res = 300, width = 800, height = 640)
+g
+dev.off()
+
+g <- ggplot(BRAF_gcn[BRAF_gcn$Drug_name == "Dabrafenib" & 
+                       BRAF_gcn$TCGA_classification == "SKCM",] %>% filter(!is.na(GCN_pred)), aes(x=AUC, y=GCN_linear)) + 
+  geom_point(size = 1.5, alpha = 0.8, aes(col = as.factor(is_mutated))) + ggpubr::stat_cor(label.x = 0.25, label.y = -4.5, size = 2.7) + theme_classic()+
+  geom_smooth(method = "lm") + 
+  theme(
+    text = element_text(size = 6, face = "bold"),
+    legend.title = element_blank(),
+    plot.title = element_text(hjust = 0.5)
+) + ggtitle("SKCM, BRAF, Dabrafenib") + 
+    scale_color_manual(labels = c("WT","Mut"), values = c("#67a9cf","#ef8a62"))
+tiff("BRAF_SKCM_DAB_cor_AUC_v3.0.tiff", res = 300, width = 800, height = 640)
+g
+dev.off()
+
+g <- ggplot(BRAF_gcn[BRAF_gcn$Drug_name == "PLX-4720",] %>% filter(!is.na(GCN_pred)), aes(x=IC50, y=GCN_linear)) + 
+  geom_point(size = 1.5, alpha = 0.7, aes(col = as.factor(is_mutated))) + ggpubr::stat_cor(label.x = -1, label.y = -4.5, size = 2.7) + theme_classic()+
+  geom_smooth(method = "lm") + 
+  theme(
+    text = element_text(size = 6, face = "bold"),
+    legend.title = element_blank(),
+    plot.title = element_text(hjust = 0.5)
+) + ggtitle("SKCM, BRAF, PLX-4720") + 
+  scale_color_manual(labels = c("WT","Mut"), values = c("#67a9cf","#ef8a62"))
+
+tiff("BRAF_SKCM_PLX_cor_v3.0_colors.tiff", res = 300, width = 800, height = 640)
+g
+dev.off()
+
+g <- ggplot(BRAF_gcn[BRAF_gcn$Drug_name == "PLX-4720",] %>% filter(!is.na(GCN_pred)), aes(x=AUC, y=GCN_linear)) + 
+  geom_point(size = 1.5, alpha = 0.7, aes(col = as.factor(is_mutated))) + ggpubr::stat_cor(label.x = 0.5, label.y = -4.5, size = 2.7) + theme_classic()+
+  geom_smooth(method = "lm") + 
+  theme(
+    text = element_text(size = 6, face = "bold"),
+    legend.title = element_blank(),
+    plot.title = element_text(hjust = 0.5)
+) + ggtitle("SKCM, BRAF, PLX-4720") + 
+  scale_color_discrete(labels = c("WT","Mut"))
+
+tiff("BRAF_SKCM_PLX_cor_AUC_v3.0.tiff", res = 300, width = 800, height = 640)
+g
+dev.off()
+
+```
+manually gbm
+```{r}
+example_model <- read.csv("./GDSC_models_3.0/GDSC_cell_lines_zscored_pan_GDSC_EGFR_GBM_GCN_predictions.csv")
+
+EGFR_gcn <- left_join(egfr, example_model, by = c("Cell_line_name"= "CELL_LINE_NAME"))
+
+EGFR_gcn <- left_join(EGFR_gcn, 
+                       gdsc_mut[,c("cell_line_name", "genetic_feature",
+                                   "is_mutated")] %>% 
+                        filter(genetic_feature == "EGFR_mut"), 
+                       by=c("Cell_line_name"="cell_line_name"))
+
+g <- ggplot(EGFR_gcn[EGFR_gcn$Drug_name == "Lapatinib",] %>% filter(!is.na(GCN_pred)), aes(x=IC50, y=GCN_linear)) + 
+  geom_point(size = 1.5, alpha = 0.7, aes(col = as.factor(is_mutated))) + ggpubr::stat_cor(label.x = 3.5, label.y = -14, size = 2.7) + theme_classic()+
+  geom_smooth(method = "lm") + 
+  theme(
+    text = element_text(size = 6, face = "bold"),
+    legend.title = element_blank(),
+    plot.title = element_text(hjust = 0.5)
+) + ggtitle("GBM, EGFR, Lapatinib") + 
+  scale_color_manual(labels = c("WT","Mut"),values = c("#67a9cf","#ef8a62"))
+
+tiff("EGFR_GBM_LAP_cor_v3.0_colors.tiff", res = 300, width = 800, height = 640)
+g
+dev.off()
+
+g <- ggplot(EGFR_gcn[EGFR_gcn$Drug_name == "Lapatinib",] %>% filter(!is.na(GCN_pred)), aes(x=AUC, y=GCN_linear)) + 
+  geom_point(size = 1.5, alpha = 0.7, aes(col = as.factor(is_mutated))) + ggpubr::stat_cor(label.x = 0.85, label.y = -14, size = 2.7) + theme_classic()+
+  geom_smooth(method = "lm") + 
+  theme(
+    text = element_text(size = 6, face = "bold"),
+    legend.title = element_blank(),
+    plot.title = element_text(hjust = 0.5)
+) + ggtitle("GBM, EGFR, Lapatinib") + 
+  scale_color_discrete(labels = c("WT","Mut"))
+
+tiff("EGFR_GBM_LAP_cor_AUC_v3.0.tiff", res = 300, width = 800, height = 640)
+g
+dev.off()
+```
+manually luad
+```{r}
+example_model <- read.csv("./GDSC_models_3.0/GDSC_cell_lines_zscored_pan_GDSC_KRAS_LUAD_GCN_predictions.csv")
+
+KRAS_gcn <- left_join(kras, example_model, by = c("Cell_line_name"= "CELL_LINE_NAME"))
+KRAS_gcn <- KRAS_gcn %>% filter(TCGA_classification == "LUAD")
+
+KRAS_gcn <- left_join(KRAS_gcn, 
+                       gdsc_mut[,c("cell_line_name", "genetic_feature",
+                                   "is_mutated")] %>% 
+                        filter(genetic_feature == "KRAS_mut"), 
+                       by=c("Cell_line_name"="cell_line_name"))
+
+
+g <- ggplot(KRAS_gcn_g12c[KRAS_gcn_g12c$Drug_name == "KRAS (G12C) Inhibitor-12",] %>% filter(!is.na(GCN_pred)), aes(x=IC50, y=GCN_linear)) + 
+  geom_point(size = 1.5, alpha = 0.7, aes(col = as.factor(g12c))) + ggpubr::stat_cor(label.x = 2, label.y = -60, size = 2.7) + theme_classic()+
+  geom_smooth(method = "lm") + 
+  theme(
+    text = element_text(size = 6, face = "bold"),
+    legend.title = element_blank(),
+    plot.title = element_text(hjust = 0.5)
+) + ggtitle("LUAD, KRAS, KRAS (G12C) Inhibitor-12") + 
+  scale_color_manual(values = c("#67a9cf","#ef8a62"))
+
+tiff("KRAS_LUAD_G12C_cor_v3.0_2_colors.tiff", res = 300, width = 800, height = 640)
+g
+dev.off()
+
+g <- ggplot(KRAS_gcn_g12c[KRAS_gcn_g12c$Drug_name == "KRAS (G12C) Inhibitor-12",] %>% filter(!is.na(GCN_pred)), aes(x=IC50, y=GCN_linear)) + 
+  geom_point(size = 1.5, alpha = 0.7, aes(col = as.factor(is_mutated))) + ggpubr::stat_cor(label.x = 2, label.y = -60, size = 2.7) + theme_classic()+
+  geom_smooth(method = "lm") + 
+  theme(
+    text = element_text(size = 6, face = "bold"),
+    legend.title = element_blank(),
+    plot.title = element_text(hjust = 0.5)
+) + ggtitle("LUAD, KRAS, KRAS (G12C) Inhibitor-12") + 
+  scale_color_manual(labels = c("WT","Mut"), values = c("#67a9cf","#ef8a62"))
+
+tiff("KRAS_LUAD_G12C_mut_cor_v3.0_2_colors.tiff", res = 300, width = 800, height = 640)
+g
+dev.off()
+
+
+g <- ggplot(KRAS_gcn[KRAS_gcn$Drug_name == "KRAS (G12C) Inhibitor-12",] %>% filter(!is.na(GCN_pred)), aes(x=AUC, y=GCN_linear)) + 
+  geom_point(size = 1.5, alpha = 0.7, aes(col = as.factor(is_mutated))) + ggpubr::stat_cor(label.x = 0.82, label.y = -60, size = 2.7) + theme_classic()+
+  geom_smooth(method = "lm") + 
+  theme(
+    text = element_text(size = 6, face = "bold"),
+    legend.title = element_blank(),
+    plot.title = element_text(hjust = 0.5)
+) + ggtitle("LUAD, KRAS, KRAS (G12C) Inhibitor-12") + 
+  scale_color_discrete(labels = c("WT","Mut"))
+
+tiff("KRAS_LUAD_G12C_cor_AUC_v3.0_2.tiff", res = 300, width = 800, height = 640)
+g
+dev.off()
+```
+
+Generalize
+```{r}
+model_names <- list.files("./GDSC_models/GDSC_models_2.0", pattern = "*.csv")
+genes <- stringr::str_split(model_names[1], "_")[[1]][7]
+proj <- stringr::str_split(model_names[1], "_")[[1]][8]
+
+for(i in 2:length(model_names)){
+  genes <- c(genes,stringr::str_split(model_names[i], "_")[[1]][7])
+  proj <- c(proj,stringr::str_split(model_names[i], "_")[[1]][8])
+}
+
+meta <- data.frame(gene = c(genes[1],genes), proj = c(proj[1],proj), #choose drugs manually
+                   treatment = c("Dabrafenib","PLX-4720",
+                                 "Dabrafenib","Lapatinib",
+                                 "Afatinib","KRAS (G12C) Inhibitor-12",
+                                 "KRAS (G12C) Inhibitor-12","KRAS (G12C) Inhibitor-12","KRAS (G12C) Inhibitor-12",
+              "LATER"))
+meta <- meta[-10,]
+
+gcn <- NULL
+for(i in 1:(length(meta$gene)-1)){
+  print(tolower(meta$gene[i]))
+  gcn <- rbind(gcn, 
+               get(tolower(meta$gene[i])) %>%
+                 left_join(read.csv(paste0("./GDSC_models/GDSC_models_2.0/",model_names[i])),
+                           by = c("Cell_line_name"= "CELL_LINE_NAME")))
+}
+
+meta <- meta[c(1,2,4,5,7),]
+for(i in 1:nrow(meta)){
+  gnc_temp <- gcn[gcn$Drug_name == meta$treatment[i] & gcn$TCGA_classification == meta$proj[i],]
+  print(head(gnc_temp))
+  g <- ggplot(gnc_temp, aes(x=IC50, y=GCN_linear)) + 
+    geom_point(size = 3, alpha = 0.7, aes(col = as.factor(GCN_pred))) +
+    ggpubr::stat_cor() + theme_classic()+
+    geom_smooth(method = "lm") + 
+    theme(
+    text = element_text(size = 8, face = "bold")
+  ) + ggtitle(paste(meta$gene[i],meta$proj[i], meta$treatment[i]))
+  print(g)
+}
+```
+
+# Normalized_by_tissue_cell_lines_only
+```{r}
+model_names <- list.files("./GDSC_models/Normalized_by_tissue_cell_lines_only", pattern = "*.csv")
+genes <- stringr::str_split(model_names[1], "_")[[1]][6]
+proj <- stringr::str_split(model_names[1], "_")[[1]][7]
+
+for(i in 2:length(model_names)){
+  genes <- c(genes,stringr::str_split(model_names[i], "_")[[1]][6])
+  proj <- c(proj,stringr::str_split(model_names[i], "_")[[1]][7])
+}
+
+meta <- data.frame(gene = genes, proj = proj, #choose drugs manually
+                   treatment = c("Dabrafenib",
+                                 "VX-11e","Osimertinib",
+                                 "Afatinib","KRAS (G12C) Inhibitor-12",
+                                 "KRAS (G12C) Inhibitor-12","KRAS (G12C) Inhibitor-12","KRAS (G12C) Inhibitor-12"))
+
+for(i in 1:nrow(meta)){
+  gcn <- get(tolower(meta$gene[i])) %>% 
+  left_join(read.csv(paste0("./GDSC_models/Normalized_by_tissue_cell_lines_only/",model_names[i])),
+                               by = c("Cell_line_name"= "CELL_LINE_NAME"))
+  
+  g <- ggplot(gcn[gcn$Drug_name == meta$treatment[i] & gcn$TCGA_classification == meta$proj[i],], aes(x=IC50, y=GCN_linear)) + 
+  geom_point(size = 3, alpha = 0.7, aes(col = as.factor(GCN_pred))) + ggpubr::stat_cor() + theme_classic()+
+  geom_smooth(method = "lm") + 
+  theme(
+    text = element_text(size = 8, face = "bold")
+  ) + ggtitle(paste(meta$gene[i],meta$proj[i], meta$treatment[i]))
+  print(g)
+}
+```
+
+# v2 - pan_GDSC
+```{r}
+pan_gdsc <- read.csv("./GDSC_models/GDSC_models_2.0/GDSC_cell_lines_zscored_pan_GDSC_RTK RAS_all_cancer_types_GCN_predictions.csv")
+gdsc2_v2 <- readxl::read_excel("GDSC2_fitted_dose_response_25Feb20.xlsx")
+gdsc_mut <- read.csv("PANCANCER_Genetic_feature_variant_Mon Jan 31 20_25_43 2022.csv")
+```
+function
+```{r}
+df_per_projGeneDrug <- function(proj, gene, drug){
+  gcn <- pan_gdsc %>% 
+    filter(tumor_type %in% proj)
+  
+  gdsc <- gdsc2_v2 %>%
+    filter(DRUG_NAME %in% drug & CELL_LINE_NAME %in% gcn$CELL_LINE_NAME)
+  
+  mut <- gdsc_mut %>%
+    filter(cell_line_name %in% gdsc$CELL_LINE_NAME & genetic_feature == paste0(gene, "_mut") & tcga_desc %in% proj)
+  
+  joined <- gcn %>% left_join(gdsc, by = "CELL_LINE_NAME") %>%
+    left_join(mut, by = c("CELL_LINE_NAME"="cell_line_name"))
+  
+  return(joined)
+}
+
+cor_fun <- function(joined){
+    g1 <- ggplot(joined, aes(x=AUC, y=GCN_linear, col = as.factor(is_mutated))) + 
+        geom_point(size=1.5, alpha = 0.7) + ggpubr::stat_cor(size=2.7) + theme_classic()+
+        geom_smooth(method = "lm") + 
+        theme(
+            text = element_text(size = 9, face = "bold"),
+            legend.title = element_blank(),
+            plot.title = element_text(hjust = 0.5)
+        ) + 
+        ggtitle(paste(joined$tumor_type,
+                      gsub("_mut", "", joined$genetic_feature),
+                      joined$DRUG_NAME, sep = ", ")) + 
+        scale_color_discrete(labels = c("WT","Mut"))
+    
+    return(g1)
+}
+
+cor_fun_no_fill <- function(joined){
+  g1 <- ggplot(joined, aes(x=AUC, y=GCN_linear)) + 
+    geom_point() + ggpubr::stat_cor(size=2.3) + theme_classic()+
+  geom_smooth(method = "lm") + 
+  theme(
+    text = element_text(size = 7, face = "bold")
+  ) + 
+    ggtitle(paste(joined$tumor_type,
+                   gsub("_mut", "", joined$genetic_feature),
+                   joined$DRUG_NAME))
+  
+  return(g1)
+}
+
+boxplot_fun <- function(joined){
+  g <- ggplot(joined) + 
+    geom_boxplot(aes(x=as.factor(is_mutated), y=IC50, 
+                     fill = as.factor(is_mutated)), alpha=0.6, 
+                 outlier.shape = NA) + 
+    geom_point(aes(x=as.factor(is_mutated), y=IC50), 
+               position = position_jitter(width = 0.25), 
+               alpha = 0.5) + 
+    theme_classic() +
+    theme(
+      text = element_text(size = 7, face = "bold"),
+      axis.title.x = element_blank(),
+      axis.text.x = element_blank(),
+      legend.title = element_blank(),
+      axis.title.y = element_text(size=9)
+    ) + 
+  scale_fill_discrete(labels = c("WT","Mut"))
+
+  return(g)
+}
+
+```
+
+excecution
+```{r}
+erbb2_afat <- df_per_projGeneDrug("BRCA","ERBB2", "Afatinib")
+g1 <- cor_fun(erbb2_afat %>% filter(!is.na(AUC)))
+
+braf_dab <- df_per_projGeneDrug("SKCM","BRAF", "Dabrafenib")
+g2 <- cor_fun(braf_dab %>% filter(!is.na(AUC)))
+
+braf_plx <- df_per_projGeneDrug("SKCM","BRAF", "PLX-4720")
+g3 <- cor_fun(braf_plx %>% filter(!is.na(AUC)))
+
+egfr_lapa <- df_per_projGeneDrug("GBM","EGFR", "Lapatinib")
+g4 <- cor_fun(egfr_lapa %>% filter(!is.na(AUC)))
+
+kras_g12c <- df_per_projGeneDrug("LUAD","KRAS", "KRAS (G12C) Inhibitor-12")
+g5 <- cor_fun(kras_g12c %>% filter(!is.na(AUC)))
+
+tiff("gcn_gdsc2_cor_v2.0.tiff", width = 1920, height = 1920, res = 300)
+gridExtra::grid.arrange(g1, g2, g3, g4, g5, ncol = 2)
+dev.off()
+
+#pdf("gcn_gdsc2_cor.pdf")
+#gridExtra::grid.arrange(g1, g2, g3, g4, g5, ncol = 2)
+#dev.off()
+```
+
+RAS
+```{r pan cancer filter}
+df_per_GeneDrug <- function(genes, drug){
+  gcn <- pan_gdsc
+  
+  gdsc <- gdsc2_v2 %>%
+    filter(DRUG_NAME %in% drug & CELL_LINE_NAME %in% gcn$CELL_LINE_NAME)
+  
+  genes_mut <- NULL
+  for(i in 1:length(genes)){
+    genes_mut <- c(genes_mut, paste0(genes[i], "_mut"))
+  }
+  
+  mut <- gdsc_mut %>%
+    filter(cell_line_name %in% gdsc$CELL_LINE_NAME & genetic_feature %in% genes_mut)
+  
+  joined <- gcn %>% left_join(gdsc, by = "CELL_LINE_NAME") %>%
+    left_join(mut, by = c("CELL_LINE_NAME"="cell_line_name"))
+  
+  return(joined)
+}
+
+df_per_projGene <- function(proj, gene){
+  gcn <- pan_gdsc %>% 
+    filter(tumor_type %in% proj)
+  
+  gdsc <- gdsc2_v2 %>%
+    filter(CELL_LINE_NAME %in% gcn$CELL_LINE_NAME)
+  
+  mut <- gdsc_mut %>%
+    filter(cell_line_name %in% gdsc$CELL_LINE_NAME & genetic_feature == paste0(gene, "_mut") & tcga_desc %in% proj)
+  
+  joined <- gcn %>% left_join(gdsc, by = "CELL_LINE_NAME") %>%
+    left_join(mut, by = c("CELL_LINE_NAME"="cell_line_name"))
+  
+  joined <- joined %>% select(CELL_LINE_NAME, GCN_pred, GCN_linear, is_mutated) %>% group_by(CELL_LINE_NAME) %>% summarise_all(max)
+  
+  return(joined)
+}
+
+df_per_Genes <- function(genes){
+  gcn <- pan_gdsc
+  
+  gdsc <- gdsc2_v2 %>%
+    filter(CELL_LINE_NAME %in% gcn$CELL_LINE_NAME)
+  
+  genes_mut <- NULL
+  for(i in 1:length(genes)){
+    genes_mut <- c(genes_mut, paste0(genes[i], "_mut"))
+  }
+  
+  mut <- gdsc_mut %>%
+    filter(cell_line_name %in% gdsc$CELL_LINE_NAME & genetic_feature %in% genes_mut)
+  
+  joined <- gcn %>% left_join(gdsc, by = "CELL_LINE_NAME") %>%
+    left_join(mut, by = c("CELL_LINE_NAME"="cell_line_name"))
+  
+  joined <- joined %>% select(CELL_LINE_NAME, GCN_pred, GCN_linear, is_mutated) %>% group_by(CELL_LINE_NAME) %>% summarise_all(max)
+  
+  return(joined)
+}
+
+```
+
+```{r}
+ras_PD0325901 <- df_per_GeneDrug(c("NRAS","KRAS","HRAS"), "PD0325901")
+
+ras_PD0325901_un <- ras_PD0325901[,colnames(ras_PD0325901) != "genetic_feature"] %>%
+  group_by(CELL_LINE_NAME) %>% summarise_all(max)
+g1 <- cor_fun(ras_PD0325901_un %>% filter(!is.na(AUC) & !is.na(is_mutated)))
+
+tiff("ras_PD0325901_v2.0.tiff", res=300, width = 1200, height = 720)
+g1+ggtitle("Pan-cancer, RAS, PD0325901")
+dev.off()
+
+#Selumetinib
+ras_Selumetinib <- df_per_GeneDrug(c("NRAS","KRAS","HRAS"), "Selumetinib")
+
+ras_Selumetinib_un <- ras_Selumetinib[,colnames(ras_Selumetinib) != "genetic_feature"] %>%
+  group_by(CELL_LINE_NAME) %>% summarise_all(max)
+g2 <- cor_fun(ras_Selumetinib_un %>% filter(!is.na(AUC) & !is.na(is_mutated)))
+
+tiff("ras_Selumetinib_v2.0.tiff", res=300, width = 1200, height = 720)
+g2+ggtitle("Pan-cancer, RAS, Selumetinib")
+dev.off()
+
+#mut vs linear score
+g3 <- boxplot_fun(ras_PD0325901_un %>% filter(!is.na(is_mutated))) 
+tiff("ras_PD0325901_boxplot_v2.0.tiff", res=300, width = 1020, height = 640)
+g3
+dev.off()
+
+p <- wilcox.test(ras_PD0325901_un$GCN_linear[ras_PD0325901_un$is_mutated == 1],
+            ras_PD0325901_un$GCN_linear[ras_PD0325901_un$is_mutated == 0], alternative = "greater")$p.val
+
+g3 <- boxplot_fun(ras_PD0325901_un %>% filter(!is.na(is_mutated))) 
+g3 <- g3 + ggtitle("Pan-cancer, RAS pathway")
+tiff(sprintf("ras_PD0325901_boxplot_v2.0_%f.tiff",p), res=300, width = 1020, height = 640)
+g3
+dev.off()
+
+p<- wilcox.test(ras_Selumetinib_un$GCN_linear[ras_Selumetinib_un$is_mutated == 1],
+            ras_Selumetinib_un$GCN_linear[ras_Selumetinib_un$is_mutated == 0])$p.val
+
+g4 <- boxplot_fun(ras_Selumetinib_un %>% filter(!is.na(is_mutated))) 
+tiff(sprintf("ras_Selumetinib_boxplot_v2.0_%f.tiff",p), res=300, width = 1020, height = 640)
+g4 + ggtitle("Pan-cancer, RAS pathway")
+dev.off()
+
+```
+
+#other boxplots
+```{r}
+#braf plx
+p1 <- wilcox.test(braf_plx$GCN_linear[braf_plx$is_mutated == 1],
+            braf_plx$GCN_linear[braf_plx$is_mutated == 0], alternative = "greater")$p.val
+
+g <- boxplot_fun(braf_plx %>% filter(!is.na(is_mutated)))
+g <- g + ggtitle("SKCM, BRAF, PLX-4720")
+tiff(sprintf("braf_plx_boxplot_v2.0_%f.tiff",p1), res=300, width = 1020, height = 640)
+g
+dev.off()
+
+#braf dab
+p2 <- wilcox.test(braf_dab$GCN_linear[braf_dab$is_mutated == 1],
+            braf_dab$GCN_linear[braf_dab$is_mutated == 0], alternative = "greater")$p.val
+
+g <- boxplot_fun(braf_dab %>% filter(!is.na(is_mutated)))
+g <- g + ggtitle("SKCM, BRAF, Dabrafenib")
+tiff(sprintf("braf_dab_boxplot_v2.0_%f.tiff",p2), res=300, width = 1020, height = 640)
+g
+dev.off()
+
+#kras g12c
+p3 <- wilcox.test(kras_g12c$GCN_linear[kras_g12c$is_mutated == 1],
+            kras_g12c$GCN_linear[kras_g12c$is_mutated == 0], alternative = "greater")$p.val
+
+g <- boxplot_fun(KRAS_gcn_g12c %>% filter(!is.na(is_mutated)))
+g <- g + ggtitle("LUAD, KRAS, KRAS (G12C) Inhibitor-12")   
+tiff(sprintf("kras_g12c_boxplot_v2.0_%f.tiff",p3), res=300, width = 1020, height = 640)
+g
+dev.off()
+```
+#without drug
+```{r}
+#braf SKCM
+t <- df_per_projGene("SKCM","BRAF")
+p1 <- wilcox.test(t$GCN_linear[t$is_mutated == 1],
+            t$GCN_linear[t$is_mutated == 0], alternative = "greater")$p.val
+
+g <- boxplot_fun(t %>% filter(!is.na(is_mutated)))
+g <- g + ggtitle("SKCM, BRAF")
+tiff(sprintf("skcm_braf_boxplot_%f.tiff",p1), res=300, width = 1020, height = 640)
+g
+dev.off()
+
+#kras luad
+t <- df_per_projGene("LUAD","KRAS")
+p2 <- wilcox.test(t$GCN_linear[t$is_mutated == 1],
+            t$GCN_linear[t$is_mutated == 0], alternative = "greater")$p.val
+
+g <- boxplot_fun(t %>% filter(!is.na(is_mutated)))
+g <- g + ggtitle("LUAD, KRAS")
+tiff(sprintf("luad_kras_boxplot_%f.tiff",p2), res=300, width = 1020, height = 640)
+g
+dev.off()
+
+#ras pan cancer
+t <- df_per_Genes(c("HRAS","KRAS","NRAS"))
+p3 <- wilcox.test(t$GCN_linear[t$is_mutated == 1],
+            t$GCN_linear[t$is_mutated == 0], alternative = "greater")$p.val
+
+g <- boxplot_fun(t %>% filter(!is.na(is_mutated)))
+g <- g + ggtitle("Pan-cancer, RAS pathway")
+tiff(sprintf("pancan_ras_boxplot_v2.0_%f.tiff",p3), res=300, width = 1020, height = 640)
+g
+dev.off()
+```
+
+# erbb2 amplification
+```{r}
+amp <- read.csv("cnv_summary_20220315.csv")
+amp <- amp %>% filter(symbol == "ERBB2")
+table(erbb2$Cell_line_name %in% amp$model_name) # true
+
+amp <- amp %>% filter(model_name %in% erbb2$Cell_line_name) 
+amp <- amp %>% group_by(model_name) %>% summarise_all(max)
+table(amp$cn_category)
+
+erbb2_gcn_amp <- left_join(erbb2_gcn, amp %>% select(model_name, cn_category), by =c("Cell_line_name"="model_name"))
+erbb2_gcn_amp$CNV <- ifelse(erbb2_gcn_amp$cn_category %in% c("Amplification","Gain"), "Amp/Gain", "Neutral/Loss")
+
+g <- ggplot(erbb2_gcn_amp[erbb2_gcn_amp$Drug_name == "Afatinib",] %>% filter(!is.na(GCN_pred)), aes(x=AUC, y=GCN_linear)) + 
+  geom_point(size = 1.5, alpha = 0.7, aes(col = as.factor(cn_category))) + ggpubr::stat_cor(label.x = 0.25, label.y = -10, size = 2.7) + theme_classic()+
+  geom_smooth(method = "lm") + 
+  theme(
+    text = element_text(size = 6, face = "bold"),
+    legend.title = element_blank(),
+    plot.title = element_text(hjust = 0.5)
+) + ggtitle("BRCA, ERBB2, Afatinib")# + 
+ # scale_color_discrete(labels = c("WT","Mut"))
+
+tiff("ERBB2_amp_Afatinib_cor_AUC_v3.0.tiff", res = 300, width = 800, height = 640)
+g
+dev.off()
+
+g <- ggplot(erbb2_gcn_amp[erbb2_gcn_amp$Drug_name == "Afatinib",] %>% filter(!is.na(GCN_pred)), aes(x=IC50, y=GCN_linear)) + 
+  geom_point(size = 1.5, alpha = 0.7, aes(col = as.factor(cn_category))) + ggpubr::stat_cor(label.x = -3, label.y = -10, size = 2.7) + theme_classic()+
+  geom_smooth(method = "lm") + 
+  theme(
+    text = element_text(size = 6, face = "bold"),
+    legend.title = element_blank(),
+    plot.title = element_text(hjust = 0.5)
+) + ggtitle("BRCA, ERBB2, Afatinib")# + 
+ # scale_color_discrete(labels = c("WT","Mut"))
+
+tiff("ERBB2_amp_Afatinib_cor_IC50_v3.0_colors.tiff", res = 300, width = 800, height = 640)
+g
+dev.off()
+
+g <- ggplot(erbb2_gcn_amp[erbb2_gcn_amp$Drug_name == "Afatinib" & erbb2_gcn_amp$cn_category == "Amplification",] %>% filter(!is.na(GCN_pred)), aes(x=IC50, y=GCN_linear)) + 
+  geom_point(size = 1.5, alpha = 0.7, aes(col = as.factor(cn_category))) + ggpubr::stat_cor(label.x = -3.8, label.y = -3, size = 2.7) + theme_classic()+
+  geom_smooth(method = "lm") + 
+  theme(
+    text = element_text(size = 6, face = "bold"),
+    legend.title = element_blank(),
+    plot.title = element_text(hjust = 0.5)
+) + ggtitle("BRCA, ERBB2, Afatinib") + 
+  scale_color_manual(values = c("#ef8a62"))
+
+tiff("ERBB2_amp_alone_Afatinib_cor_IC50_v3.0_colors.tiff", res = 300, width = 800, height = 640)
+g
+dev.off()
+
+g <- ggplot(erbb2_gcn_amp[erbb2_gcn_amp$Drug_name == "Afatinib" & erbb2_gcn_amp$cn_category == "Amplification",] %>% filter(!is.na(GCN_pred)), aes(x=AUC, y=GCN_linear)) + 
+  geom_point(size = 1.5, alpha = 0.7, aes(col = as.factor(cn_category))) + ggpubr::stat_cor(label.x = 0.1, label.y = -3, size = 2.7) + theme_classic()+
+  geom_smooth(method = "lm") + 
+  theme(
+    text = element_text(size = 6, face = "bold"),
+    legend.title = element_blank(),
+    plot.title = element_text(hjust = 0.5)
+) + ggtitle("BRCA, ERBB2, Afatinib")# + 
+ # scale_color_discrete(labels = c("WT","Mut"))
+    
+tiff("ERBB2_amp_alone_Afatinib_cor_AUC_v3.0.tiff", res = 300, width = 800, height = 640)
+g
+dev.off()
+
+```
+
+# G12C
+```{r}
+g12c <- read.csv("mutations_summary_20220315.csv")
+table(KRAS_gcn$Cell_line_name %in% g12c$model_name)
+#KRAS_gcn$Cell_line_name[!KRAS_gcn$Cell_line_name %in% g12c$model_name]
+
+g12c <- g12c %>% filter(model_name %in% KRAS_gcn$Cell_line_name)
+g12c <- g12c %>% filter(protein_mutation == "p.G12C")
+
+KRAS_gcn_g12c <- KRAS_gcn %>% 
+  mutate(g12c = ifelse(Cell_line_name %in% g12c$model_name, 
+         "p.G12C","non-G12C"))
+
+g <- ggplot(KRAS_gcn_g12c[KRAS_gcn_g12c$Drug_name == "KRAS (G12C) Inhibitor-12",] %>% filter(!is.na(GCN_pred)), aes(x=AUC, y=GCN_linear)) + 
+  geom_point(size = 1.5, alpha = 0.7, aes(col = as.factor(g12c))) + ggpubr::stat_cor(label.x = 0.82, label.y = -60, size = 2.7) + theme_classic()+
+  geom_smooth(method = "lm") + 
+  theme(
+    text = element_text(size = 6, face = "bold"),
+    legend.title = element_blank(),
+    plot.title = element_text(hjust = 0.5)
+) + ggtitle("LUAD, KRAS, KRAS (G12C) Inhibitor-12") #+ 
+  #scale_color_discrete(labels = c("WT","Mut"))
+
+tiff("KRAS_G12C_LUAD_G12C_cor_AUC_v3.0.tiff", res = 300, width = 800, height = 640)
+g
+dev.off()
+
+g <- ggplot(KRAS_gcn_g12c[KRAS_gcn_g12c$Drug_name == "KRAS (G12C) Inhibitor-12",] %>% filter(!is.na(GCN_pred)), aes(x=IC50, y=GCN_linear)) + 
+  geom_point(size = 1.5, alpha = 0.7, aes(col = as.factor(g12c))) + ggpubr::stat_cor(label.x = 0.82, label.y = -60, size = 2.7) + theme_classic()+
+  geom_smooth(method = "lm") + 
+  theme(
+    text = element_text(size = 6, face = "bold"),
+    legend.title = element_blank(),
+    plot.title = element_text(hjust = 0.5)
+) + ggtitle("LUAD, KRAS, KRAS (G12C) Inhibitor-12") #+ 
+  #scale_color_discrete(labels = c("WT","Mut"))
+
+tiff("KRAS_G12C_LUAD_G12C_cor_IC50_v3.0.tiff", res = 300, width = 800, height = 640)
+g
+dev.off()
+```
+
+
+# BRAF V600
+```{r}
+braf <- read.csv("mutations_summary_20220315.csv")
+table(BRAF_gcn$Cell_line_name %in% braf$model_name)
+#KRAS_gcn$Cell_line_name[!KRAS_gcn$Cell_line_name %in% g12c$model_name]
+
+braf <- braf %>% filter(model_name %in% BRAF_gcn$Cell_line_name)
+braf <- braf %>% filter(protein_mutation == "p.V600E")
+
+BRAF_gcn_v600 <- BRAF_gcn %>% 
+  mutate(braf = ifelse(Cell_line_name %in% braf$model_name, 
+         "p.V600E","non-V600E"))
+
+g <- ggplot(BRAF_gcn_v600[BRAF_gcn_v600$Drug_name == "PLX-4720",] %>% filter(!is.na(GCN_pred)), aes(x=AUC, y=GCN_linear)) + 
+  geom_point(size = 1.5, alpha = 0.7, aes(col = as.factor(braf))) + ggpubr::stat_cor(label.x = 0.5, label.y = -5, size = 2.7) + theme_classic()+
+  geom_smooth(method = "lm") + 
+  theme(
+    text = element_text(size = 6, face = "bold"),
+    legend.title = element_blank(),
+    plot.title = element_text(hjust = 0.5)
+) + ggtitle("SKCM, BRAF, PLX-4720") #+ 
+  #scale_color_discrete(labels = c("WT","Mut"))
+
+tiff("BRAF_PLX-4720_SKCM_cor_AUC_v3.0.tiff", res = 300, width = 800, height = 640)
+g
+dev.off()
+
+g <- ggplot(BRAF_gcn_v600[BRAF_gcn_v600$Drug_name == "Dabrafenib",] %>% filter(!is.na(GCN_pred)), aes(x=IC50, y=GCN_linear)) + 
+  geom_point(size = 1.5, alpha = 0.7, aes(col = as.factor(braf))) + ggpubr::stat_cor(label.x = -3.75, label.y = -5, size = 2.7) + theme_classic()+
+  geom_smooth(method = "lm") + 
+  theme(
+    text = element_text(size = 6, face = "bold"),
+    legend.title = element_blank(),
+    plot.title = element_text(hjust = 0.5)
+) + ggtitle("SKCM, BRAF, Dabrafenib") +  
+  scale_color_manual(values = c("#67a9cf","#ef8a62"))
+
+
+tiff("BRAF_Dabrafenib_SKCM_cor_IC50_v3.0_colors.tiff", res = 300, width = 800, height = 640)
+g
+dev.off()
+
+
+g <- ggplot(BRAF_gcn_v600[BRAF_gcn_v600$Drug_name == "PLX-4720" & BRAF_gcn_v600$braf == "p.V600E",] %>% filter(!is.na(GCN_pred)), aes(x=AUC, y=GCN_linear)) + 
+  geom_point(size = 1.5, alpha = 0.7, aes(col = as.factor(braf))) + ggpubr::stat_cor(label.x = 0.5, label.y = -5, size = 2.7) + theme_classic()+
+  geom_smooth(method = "lm") + 
+  theme(
+    text = element_text(size = 6, face = "bold"),
+    legend.title = element_blank(),
+    plot.title = element_text(hjust = 0.5)
+) + ggtitle("SKCM, BRAF, PLX-4720") #+ 
+  #scale_color_discrete(labels = c("WT","Mut"))
+
+tiff("BRAF_v600_alone_PLX-4720_SKCM_cor_AUC_v3.0.tiff", res = 300, width = 800, height = 640)
+g
+dev.off()
+
+g <- ggplot(BRAF_gcn_v600[BRAF_gcn_v600$Drug_name == "Dabrafenib" & BRAF_gcn_v600$braf == "p.V600E",] %>% filter(!is.na(GCN_pred)), aes(x=IC50, y=GCN_linear)) + 
+  geom_point(size = 1.5, alpha = 0.7, aes(col = as.factor(braf))) + ggpubr::stat_cor(label.x = -1.5, label.y = -5, size = 2.7) + theme_classic()+
+  geom_smooth(method = "lm") + 
+  theme(
+    text = element_text(size = 6, face = "bold"),
+    legend.title = element_blank(),
+    plot.title = element_text(hjust = 0.5)
+) + ggtitle("SKCM, BRAF, Dabrafenib") + 
+  scale_color_manual(values = c("#ef8a62"))
+
+tiff("BRAF_v600_alone_Dabrafenib_SKCM_cor_IC50_v3.0_colors.tiff", res = 300, width = 800, height = 640)
+g
+dev.off()
+
+```
+boxplot for negative control
+```{r}
+#KRAS LUAD
+g <- boxplot_fun(KRAS_gcn_g12c %>% filter(!is.na(is_mutated)))
+g <- g + ggtitle("LUAD, KRAS, KRAS (G12C) Inhibitor-12") + scale_fill_manual(labels=c("WT","Mut"), values = c("#67a9cf","#ef8a62"))
+p <- wilcox.test(KRAS_gcn_g12c$IC50[KRAS_gcn_g12c$is_mutated == 1],
+            KRAS_gcn_g12c$IC50[KRAS_gcn_g12c$is_mutated == 0])$p.val
+
+tiff(sprintf("LUAD_KRAS_mut_G12Ci_boxplot_v3.0_%f.tiff",p), res=300, width = 1020, height = 640)
+g
+dev.off()
+
+g <- boxplot_fun(KRAS_gcn_g12c %>% filter(!is.na(is_mutated)))
+g <- g + ggtitle("LUAD, KRAS, KRAS (G12C) Inhibitor-12") + scale_fill_manual(values = c("#67a9cf","#ef8a62"))
+p <- wilcox.test(KRAS_gcn_g12c$IC50[KRAS_gcn_g12c$g12c == "p.G12C"],
+            KRAS_gcn_g12c$IC50[KRAS_gcn_g12c$g12c == "non-G12C"])$p.val
+
+tiff(sprintf("LUAD_KRAS_G12C-mut_G12Ci_boxplot_v3.0_%f.tiff",p), res=300, width = 1020, height = 640)
+g
+dev.off()
+
+
+#egfr gmb
+g <- boxplot_fun(EGFR_gcn %>% filter(!is.na(is_mutated) & Drug_name == "Lapatinib"))
+g <- g + ggtitle("GBM, EGFR, Lapatinib") + scale_fill_manual(labels=c("WT","Mut"), values = c("#67a9cf","#ef8a62"))
+p <- wilcox.test(EGFR_gcn$IC50[EGFR_gcn$is_mutated == 1 & EGFR_gcn$Drug_name == "Lapatinib"],
+            EGFR_gcn$IC50[EGFR_gcn$is_mutated == 0 & EGFR_gcn$Drug_name == "Lapatinib"])$p.val
+
+tiff(sprintf("GBM_EGFR_Lapatinib_boxplot_v3.0_%f.tiff",p), res=300, width = 1020, height = 640)
+g
+dev.off()
+```
+
+
+TP53 models
+```{r}
+tp53 <- read.csv("mutations_summary_20220315.csv") %>% 
+  filter(gene_symbol == "TP53")
+
+TP53_GCN <- read.csv("GDSC_TP53_models_3.0/GDSC_cell_lines_zscored_pan_GDSC_TP53_pan_cancer_GCN_predictions.csv") %>%
+  mutate(is_mutated = ifelse(CELL_LINE_NAME %in% tp53$model_name, 1,0)) %>%
+  left_join(gdsc2 %>% filter(Drug_name == "Nutlin-3a (-)"), by=c("CELL_LINE_NAME"="Cell_line_name"))
+
+table(TP53_GCN$is_mutated)
+
+g <- ggplot(TP53_GCN[TP53_GCN$Drug_name == "Nutlin-3a (-)",] %>% filter(!is.na(Drug_name)), aes(x=IC50, y=GCN_linear)) + 
+  geom_point(size = 1.5, alpha = 0.7, aes(col = as.factor(is_mutated))) + ggpubr::stat_cor(label.x = 4, label.y = -5.5, size = 2.7) + theme_classic()+
+  geom_smooth(method = "lm") + 
+  # scale_y_continuous(breaks = seq(-20,20,5))+
+  theme(
+    text = element_text(size = 6, face = "bold"),
+    legend.title = element_blank(),
+    plot.title = element_text(hjust = 0.5)
+) + ggtitle("Pan-cancer, TP53, Nutlin-3a (-)") +  
+  scale_color_manual(labels = c("WT","Mut"),values = c("#67a9cf","#ef8a62"))
+
+
+tiff("TP53_Nutlin_PanCan_cor_IC50_v3.0_colors.tiff", res = 300, width = 800, height = 640)
+g
+dev.off()
+
+
+##only mut tp53
+g <- ggplot(TP53_GCN[TP53_GCN$Drug_name == "Nutlin-3a (-)",] %>% filter(!is.na(Drug_name) & is_mutated == 1), 
+            aes(x=IC50, y=GCN_linear)) + 
+  geom_point(size = 1.5, alpha = 0.7, aes(col = as.factor(is_mutated))) + ggpubr::stat_cor(label.x = 3.25, label.y = -13, size = 2.7) + theme_classic()+
+  geom_smooth(method = "lm") + 
+  # scale_y_continuous(breaks = seq(-20,20,5))+
+  theme(
+    text = element_text(size = 6, face = "bold"),
+    legend.title = element_blank(),
+    plot.title = element_text(hjust = 0.5)
+) + ggtitle("Pan-cancer, TP53, Nutlin-3a (-)") +  
+  scale_color_manual(labels = c("Mut"),values = c("#ef8a62"))
+
+
+tiff("TP53_Nutlin_LUAD_cor_IC50_v3.0_colors_only_TP53mut.tiff", res = 300, width = 800, height = 640)
+g
+dev.off()
+
+##only wt tp53
+g <- ggplot(TP53_GCN[TP53_GCN$Drug_name == "Nutlin-3a (-)",] %>% filter(!is.na(Drug_name) & is_mutated == 0), 
+            aes(x=IC50, y=GCN_linear)) + 
+  geom_point(size = 1.5, alpha = 0.7, aes(col = as.factor(is_mutated))) + ggpubr::stat_cor(label.x = 2, label.y = -16.5, size = 2.7) + theme_classic()+
+  geom_smooth(method = "lm") + 
+  scale_y_continuous(breaks = seq(-20,20,5))+
+  theme(
+    text = element_text(size = 6, face = "bold"),
+    legend.title = element_blank(),
+    plot.title = element_text(hjust = 0.5)
+) + ggtitle("Pan-cancer, TP53, Nutlin-3a (-)") +  
+  scale_color_manual(labels = c("WT"),values = c("#67a9cf"))
+
+
+tiff("TP53_Nutlin_LUAD_cor_IC50_v3.0_colors_only_TP53wt.tiff", res = 300, width = 800, height = 640)
+g
+dev.off()
+```
